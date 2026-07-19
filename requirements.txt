@@ -1,0 +1,7 @@
+ultralytics
+mediapipe
+opencv-python
+streamlit
+numpy
+pandas
+matplotlib

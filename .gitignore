@@ -1,0 +1,16 @@
+# Python environment
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE folders
+.vscode/
+.idea/
+
+
+# Generated logs, reports and screenshots
+reports/
+screenshots/
