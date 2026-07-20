@@ -7,7 +7,23 @@ of warnings/risk scores, and manages UI rendering.
 """
 
 import streamlit as st
-import cv2
+
+# --- Streamlit Cloud OpenCV Headless Fallback ---
+# mediapipe and ultralytics force-install the GUI version of opencv-python.
+# If the server lacks GUI libraries (libGL/libgthread), it crashes.
+# This catches the crash, uninstalls the GUI versions, and forces headless.
+import sys
+import subprocess
+try:
+    import cv2
+except ImportError as e:
+    if "libGL" in str(e) or "libgthread" in str(e):
+        subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "opencv-python", "opencv-contrib-python", "opencv-python-headless"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless"])
+        if "cv2" in sys.modules:
+            del sys.modules["cv2"]
+        import cv2
+# ------------------------------------------------
 import pandas as pd
 import numpy as np
 import time
