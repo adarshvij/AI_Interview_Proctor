@@ -75,3 +75,28 @@ class WebcamStream:
                 self.cap.release()
                 self.cap = None
             self.latest_frame = None
+            
+
+if __name__ == "__main__":
+    webcam = WebcamStream()
+
+    if not webcam.start():
+        print("Error: Could not open webcam.")
+        raise SystemExit
+
+    print("Webcam started. Press 'q' to quit.")
+
+    while True:
+        frame = webcam.read()
+
+        if frame is None:
+            print("Failed to capture frame.")
+            break
+
+        cv2.imshow("AI Interview Proctor", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    webcam.release()
+    cv2.destroyAllWindows()
