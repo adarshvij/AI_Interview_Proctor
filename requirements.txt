@@ -19,3 +19,4 @@ ultralytics>=8.0.0                  # YOLOv8 (pulls torch automatically)
 
 # --- Data & Reporting ---
 pandas>=2.0.0
+numpy<2.0.0
