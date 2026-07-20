@@ -10,6 +10,8 @@ __pycache__/
 .vscode/
 .idea/
 
+# Model weights
+yolov8n.pt
 
 # Generated logs, reports and screenshots
 reports/

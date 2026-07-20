@@ -1,115 +1,82 @@
 """
 Report Generator Module
 
-Analyzes infraction lists, aggregates violation counts, charts behavioral
-anomalies using matplotlib, and writes final exam summary reports.
+Generates a final summary CSV report of the interview session using pandas.
+Provides reusable methods to structure the data and export it cleanly.
 """
 
+import pandas as pd
 import os
 import time
-import pandas as pd
-import matplotlib.pyplot as plt
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 class ReportGenerator:
     """
-    Assembles post-interview analytics logs. Generates summaries, visualizes
-    distracted timelines, and exports report documentation for recruiters.
+    Handles the aggregation of session metrics into structured pandas DataFrames
+    and exports them to CSV for HR/Proctor review.
     """
 
-    def __init__(self, candidate_name: str, candidate_id: str, logs: List[Dict[str, Any]], reports_dir: str = "reports"):
+    def __init__(self, reports_dir: str = "reports"):
         """
         Initializes the ReportGenerator.
 
         Args:
-            candidate_name (str): Full name of the test taker.
-            candidate_id (str): Unique candidate identifier code.
-            logs (List[Dict[str, Any]]): Collected logs from WarningSystem.
-            reports_dir (str): Directory where generated reports are exported.
+            reports_dir (str): Directory where CSV reports will be saved.
         """
-        self.candidate_name = candidate_name
-        self.candidate_id = candidate_id
-        self.logs = logs
         self.reports_dir = reports_dir
-        
-        # Ensure target folder exists
         os.makedirs(self.reports_dir, exist_ok=True)
 
-    def generate_report(self) -> str:
+    def compile_data(self, 
+                     duration_seconds: float, 
+                     counters: Dict[str, int], 
+                     risk_level: str) -> pd.DataFrame:
         """
-        Aggregates proctoring results, generates statistical charts,
-        and saves a text summary and CSV report file.
+        Structures the raw session data into a pandas DataFrame.
+
+        Args:
+            duration_seconds (float): Total length of the interview in seconds.
+            counters (Dict[str, int]): The violation counters from WarningSystem.
+            risk_level (str): The final categorical risk classification.
 
         Returns:
-            str: Path to the generated report folder or summary file.
+            pd.DataFrame: A single-row DataFrame containing the formatted summary.
         """
-        if not self.logs:
-            # Create a mock log if empty to demonstrate functionality
-            self.logs = [
-                {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "type": "System Check", "description": "Candidate session started", "screenshot": ""}
-            ]
+        # Format the duration nicely (e.g., MM:SS)
+        mins, secs = divmod(int(duration_seconds), 60)
+        formatted_duration = f"{mins:02d}:{secs:02d}"
 
-        # Convert to pandas DataFrame for quick calculations
-        df = pd.DataFrame(self.logs)
-        
-        # Export CSV log
-        csv_filename = f"{self.candidate_id}_violation_report.csv"
-        csv_filepath = os.path.join(self.reports_dir, csv_filename)
-        df.to_csv(csv_filepath, index=False)
-        
-        # Generate visual charts
-        self._generate_charts(df)
-        
-        # Generate summary text report
-        txt_filename = f"{self.candidate_id}_summary.txt"
-        txt_filepath = os.path.join(self.reports_dir, txt_filename)
-        
-        with open(txt_filepath, "w", encoding="utf-8") as f:
-            f.write("==================================================\n")
-            f.write("          AI PROCTORING ASSESSMENT REPORT         \n")
-            f.write("==================================================\n\n")
-            f.write(f"Candidate Name : {self.candidate_name}\n")
-            f.write(f"Candidate ID   : {self.candidate_id}\n")
-            f.write(f"Date           : {time.strftime('%Y-%m-%d')}\n\n")
-            f.write("Violation Summary:\n")
-            
-            # Count events
-            if "type" in df.columns:
-                counts = df["type"].value_counts()
-                for v_type, count in counts.items():
-                    f.write(f" - {v_type}: {count} occurrences\n")
-            else:
-                f.write(" - No violations logged.\n")
-                
-            f.write("\nDetailed Log of Events:\n")
-            for index, row in df.iterrows():
-                f.write(f"[{row['timestamp']}] {row['type']}: {row['description']}\n")
-                
-            f.write("\n==================================================\n")
-            f.write("                 End of Report                    \n")
-            f.write("==================================================\n")
+        # Construct the data dictionary exactly matching our requirements
+        data = {
+            "Date": [time.strftime("%Y-%m-%d %H:%M:%S")],
+            "Duration": [formatted_duration],
+            "Phone_Detections": [counters.get("phone_usage", 0)],
+            "Gaze_Violations": [counters.get("looking_away", 0)],
+            "Multiple_Faces": [counters.get("multiple_faces", 0)],
+            "No_Face_Violations": [counters.get("no_face", 0)],
+            "Final_Risk_Level": [risk_level]
+        }
 
-        return txt_filepath
+        # Create and return the pandas DataFrame
+        df = pd.DataFrame(data)
+        return df
 
-    def _generate_charts(self, df: pd.DataFrame) -> None:
+    def export_to_csv(self, df: pd.DataFrame, filename: str = None) -> str:
         """
-        Saves visual analytical graphics mapping candidate anomalies to the reports directory.
+        Saves the structured DataFrame to a CSV file.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to export.
+            filename (str, optional): Custom filename. Defaults to a timestamped name.
+
+        Returns:
+            str: The filepath of the saved CSV.
         """
-        if df.empty or "type" not in df.columns:
-            return
+        if filename is None:
+            filename = f"interview_report_{int(time.time())}.csv"
             
-        try:
-            # Bar chart of violation categories
-            plt.figure(figsize=(8, 4))
-            df["type"].value_counts().plot(kind="bar", color="crimson")
-            plt.title("Violation Frequencies")
-            plt.xlabel("Violation Type")
-            plt.ylabel("Incident Count")
-            plt.tight_layout()
-            
-            chart_path = os.path.join(self.reports_dir, f"{self.candidate_id}_chart.png")
-            plt.savefig(chart_path)
-            plt.close()
-        except Exception:
-            # Fail silently during placeholder visualization execution
-            pass
+        filepath = os.path.join(self.reports_dir, filename)
+        
+        # Save to CSV (index=False prevents pandas from writing the row numbers)
+        df.to_csv(filepath, index=False)
+        
+        return filepath

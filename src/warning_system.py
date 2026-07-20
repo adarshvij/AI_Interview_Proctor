@@ -1,140 +1,88 @@
 """
-Warning and Risk-Score Management System
+Warning System Module
 
-Tracks proctoring violations dynamically, records timestamps of events,
-saves screenshot evidence of infractions, and aggregates candidate risk scores.
+Acts as the central decision-making hub. It aggregates inputs from the Face,
+Gaze, and Phone detectors, maintains violation counters, and calculates an
+overall risk level (Low, Medium, High).
 """
 
-import time
-import os
-import cv2
-from typing import List, Dict, Any, Tuple
-import numpy as np
+from typing import Dict, Any
 
 class WarningSystem:
     """
-    Acts as a central monitoring ledger during an exam. Processes raw detection
-    signals, records occurrences, triggers screenshot saves, and calculates risk metrics.
+    Maintains state and calculates risk levels based on cumulative violations.
     """
 
-    def __init__(self, screenshot_dir: str = "screenshots", risk_growth_rate: int = 5):
+    def __init__(self):
         """
-        Initializes the WarningSystem configuration.
+        Initializes the violation counters and thresholds.
+        """
+        # We track the exact count of frames/occurrences for each rule violation
+        self.counters = {
+            "multiple_faces": 0,
+            "phone_usage": 0,
+            "looking_away": 0,
+            "no_face": 0
+        }
+        
+        self.total_risk_score = 0
+
+    def update(self, face_count: int, looking_away: bool, phone_detected: bool) -> Dict[str, Any]:
+        """
+        Updates the counters based on the latest frame's data and calculates the risk level.
 
         Args:
-            screenshot_dir (str): Directory where violation screenshots are saved.
-            risk_growth_rate (int): Incremental penalty value applied per logged infraction.
-        """
-        self.screenshot_dir = screenshot_dir
-        self.risk_growth_rate = risk_growth_rate
-        self.violation_log: List[Dict[str, Any]] = []
-        self.risk_score: int = 0
-        
-        # Track consecutive frames of violations to filter transient noise
-        self.consecutive_looking_away = 0
-        self.consecutive_no_face = 0
-        
-        # Create output directories if they do not exist
-        os.makedirs(self.screenshot_dir, exist_ok=True)
-
-    def update(self, face_count: int, is_looking_away: bool, phone_detected: bool, frame: np.ndarray) -> str:
-        """
-        Processes frame predictions, updates violation counts, and returns active status.
-
-        Args:
-            face_count (int): Number of faces visible in frame.
-            is_looking_away (bool): True if candidate is looking away.
-            phone_detected (bool): True if cell phone is in the scene.
-            frame (np.ndarray): Original image frame to capture if violation occurred.
+            face_count (int): Number of detected faces from FaceDetector.
+            looking_away (bool): True if candidate is looking away from GazeDetector.
+            phone_detected (bool): True if a phone is detected from PhoneDetector.
 
         Returns:
-            str: Active proctoring classification status.
+            Dict[str, Any]: A dictionary containing current counters and the calculated risk level.
         """
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        status = "Normal"
-
-        # Check 1: Phone Usage (High Priority Violation)
-        if phone_detected:
-            self._log_violation("Phone Usage", "Mobile phone detected in frame", frame, timestamp)
-            status = "Violation - Phone"
-
-        # Check 2: Face Count Anomaly (Multiple or None)
+        # 1. Update Counters based on raw detection inputs
         if face_count == 0:
-            self.consecutive_no_face += 1
-            if self.consecutive_no_face > 15:  # ~0.5 second threshold
-                self._log_violation("No Face Detected", "Candidate is not in front of camera", frame, timestamp)
-                status = "Violation - No Face"
-        else:
-            self.consecutive_no_face = 0
+            self.counters["no_face"] += 1
+        elif face_count > 1:
+            self.counters["multiple_faces"] += 1
+            
+        if phone_detected:
+            self.counters["phone_usage"] += 1
+            
+        if looking_away:
+            self.counters["looking_away"] += 1
 
-        if face_count > 1:
-            self._log_violation("Multiple Faces", f"Detected {face_count} individuals", frame, timestamp)
-            status = "Violation - Multiple People"
+        # 2. Calculate Risk Level
+        risk_level = self._calculate_risk_level()
 
-        # Check 3: Looking Away
-        if is_looking_away:
-            self.consecutive_looking_away += 1
-            if self.consecutive_looking_away > 30:  # ~1 second threshold
-                self._log_violation("Looking Away", "Candidate looking away from screen", frame, timestamp)
-                status = "Violation - Distracted"
-        else:
-            self.consecutive_looking_away = 0
+        # 3. Return the current snapshot state for the UI
+        # [Bug fix B2] Return a COPY of counters, not a reference.
+        # Without .copy(), the dict in session_state is the same object as
+        # self.counters, so Streamlit cannot detect changes between reruns.
+        return {
+            "counters": self.counters.copy(),
+            "risk_level": risk_level
+        }
 
-        self._calculate_risk_score()
-        return status
-
-    def _log_violation(self, violation_type: str, details: str, frame: np.ndarray, timestamp: str) -> None:
+    def _calculate_risk_level(self) -> str:
         """
-        Records a violation incident, saves a visual screenshot, and appends to logs.
-        """
-        # Save screenshot
-        filename = f"{violation_type.lower().replace(' ', '_')}_{int(time.time())}.jpg"
-        filepath = os.path.join(self.screenshot_dir, filename)
+        Calculates the risk level based on the weighted severity of violations.
         
-        # Save placeholder screenshot on disk
-        if frame is not None:
-            cv2.imwrite(filepath, frame)
-        
-        # Append log entry
-        self.violation_log.append({
-            "timestamp": timestamp,
-            "type": violation_type,
-            "description": details,
-            "screenshot": filepath
-        })
-
-    def _calculate_risk_score(self) -> None:
+        Returns:
+            str: "Low", "Medium", or "High"
         """
-        Calculates the overall risk percentage score (0-100) based on severity and count.
-        """
-        # Base multiplier logic: Phone counts for high risk, looking away is lower risk
+        # Assign different "weights" to different infractions based on severity
         score = 0
-        for log in self.violation_log:
-            if log["type"] == "Phone Usage":
-                score += 35
-            elif log["type"] == "Multiple Faces":
-                score += 25
-            elif log["type"] == "No Face Detected":
-                score += 15
-            elif log["type"] == "Looking Away":
-                score += 5
-        
-        self.risk_score = min(score, 100)
+        score += self.counters["phone_usage"] * 50     # Critical violation
+        score += self.counters["multiple_faces"] * 30  # High violation
+        score += self.counters["no_face"] * 5          # Medium violation
+        score += self.counters["looking_away"] * 2     # Minor violation (unless repeated heavily)
 
-    def get_risk_score(self) -> int:
-        """
-        Retrieves the cumulative risk score of the session.
+        self.total_risk_score = score
 
-        Returns:
-            int: Risk percentage (0-100).
-        """
-        return self.risk_score
-
-    def get_logs(self) -> List[Dict[str, Any]]:
-        """
-        Returns all registered violation logs.
-
-        Returns:
-            List[Dict[str, Any]]: List of violations containing timestamps, types, and images.
-        """
-        return self.violation_log
+        # Determine the categorical risk level
+        if score < 50:
+            return "Low"
+        elif score < 150:
+            return "Medium"
+        else:
+            return "High"
