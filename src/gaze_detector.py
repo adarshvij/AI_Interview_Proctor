@@ -29,7 +29,12 @@ class GazeDetector:
         """
         Loads the MediaPipe Face Mesh model into memory.
         """
-        self.mp_face_mesh = mp.solutions.face_mesh
+        try:
+            self.mp_face_mesh = mp.solutions.face_mesh
+        except AttributeError:
+            import mediapipe.python.solutions.face_mesh as mp_face_mesh
+            self.mp_face_mesh = mp_face_mesh
+            
         self.face_mesh_model = self.mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=1,

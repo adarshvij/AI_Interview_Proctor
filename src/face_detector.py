@@ -33,7 +33,12 @@ class FaceDetector:
         """
         Loads the MediaPipe Face Detection model.
         """
-        self.mp_face_detection = mp.solutions.face_detection
+        try:
+            self.mp_face_detection = mp.solutions.face_detection
+        except AttributeError:
+            import mediapipe.python.solutions.face_detection as mp_face_detection
+            self.mp_face_detection = mp_face_detection
+            
         self.face_detection_model = self.mp_face_detection.FaceDetection(
             min_detection_confidence=self.min_detection_confidence
         )
