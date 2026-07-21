@@ -27,6 +27,7 @@ except ImportError as e:
 import pandas as pd
 import numpy as np
 import time
+from collections import deque
 from src.webcam import WebcamStream
 from src.face_detector import FaceDetector
 from src.phone_detector import PhoneDetector
@@ -65,6 +66,10 @@ if "phone_detector" not in st.session_state:
     st.session_state.phone_detector = None
 if "gaze_detector" not in st.session_state:
     st.session_state.gaze_detector = None
+# [Bug fix B1] Cache webcam in session_state so slider changes / button clicks
+# don't destroy and re-open the camera (which causes 0.5-2s freezes).
+if "webcam" not in st.session_state:
+    st.session_state.webcam = None
 
 # --- Performance constants ---
 # [Performance P4] Width to resize inference frames to.
@@ -114,9 +119,18 @@ def main():
             st.session_state.face_detector = None
             st.session_state.phone_detector = None
             st.session_state.gaze_detector = None
+            # [Bug fix B1] Release old webcam if any, so a fresh one is created.
+            if st.session_state.webcam is not None:
+                st.session_state.webcam.release()
+                st.session_state.webcam = None
     with col2:
         if st.button("⏹️ Stop Proctoring", use_container_width=True):
             st.session_state.proctoring_active = False
+            # [Bug fix B1] Release the webcam when stopping so the camera
+            # resource and background capture thread are properly freed.
+            if st.session_state.webcam is not None:
+                st.session_state.webcam.release()
+                st.session_state.webcam = None
 
     # Main dashboard layout: 2 columns
     main_col, side_col = st.columns([2, 1])
@@ -192,16 +206,32 @@ def main():
         phone_detector = st.session_state.phone_detector
         gaze_detector = st.session_state.gaze_detector
 
-        webcam = WebcamStream()
+        # [Bug fix B1] Cache webcam in session_state so Streamlit reruns
+        # (slider changes, button clicks) don't destroy and re-open the camera.
+        if st.session_state.webcam is None:
+            st.session_state.webcam = WebcamStream()
+        webcam = st.session_state.webcam
         
         # [Performance P8] FPS measurement state
         fps = 0.0
-        frame_times = []  # Rolling window for FPS calculation
+        # [Bug fix B5] Use deque with maxlen for O(1) rolling window.
+        # list.pop(0) was O(n), shifting 29 elements every frame.
+        frame_times = deque(maxlen=30)
 
         # Track last display update time for throttling
         last_display_time = 0.0
 
-        if webcam.start():
+        # [Bug fix B1] Only call start() if the webcam isn't already running.
+        # On cached reruns (slider change, button click), the webcam is already
+        # capturing in its background thread — calling start() again would open
+        # a second VideoCapture and launch a second thread.
+        if not webcam.is_running:
+            if not webcam.start():
+                st.error("Failed to initialize webcam. Please check camera connection.")
+                st.session_state.webcam = None
+                st.stop()
+
+        if webcam.is_running:
             try:
                 while st.session_state.proctoring_active:
                     # [Performance P6] Record frame start for adaptive sleep
@@ -238,7 +268,13 @@ def main():
                     
                     # 3. Phone detection — frame-skip handled internally by PhoneDetector.
                     #    YOLO runs every 5th frame; cached result returned otherwise.
-                    phones, phone_count = phone_detector.detect_phones(frame)
+                    # [Performance P2] Pass the pre-resized BGR frame to YOLO instead
+                    # of the full 640×480 frame. YOLO already uses imgsz=320 internally,
+                    # but now it receives a ~320px input so the internal resize is a no-op.
+                    small_bgr = cv2.resize(frame, (INFERENCE_WIDTH, small_h))
+                    phones, phone_count = phone_detector.detect_phones(
+                        small_bgr, original_shape=frame.shape
+                    )
                     
                     # 4. Feed warning system & get status
                     warning_result = st.session_state.warning_system.update(
@@ -248,9 +284,10 @@ def main():
                     )
                     st.session_state.latest_result = warning_result
                     
-                    # 5. Annotate frame — all draw methods now work IN-PLACE (no copies).
-                    #    We make ONE copy here for the display frame, then draw on it.
-                    annotated_frame = frame.copy()
+                    # [Performance P4] Draw directly on `frame` instead of frame.copy().
+                    # We read a fresh frame every loop iteration, so the original is
+                    # never reused — the copy was unnecessary (~0.5ms saved per frame).
+                    annotated_frame = frame
                     
                     # [Bug fix B4] Draw ALL detections, not just faces.
                     # Previously, only draw_faces() was called. Phone bounding boxes
@@ -315,10 +352,10 @@ def main():
                     
                     # [Performance P8] Calculate FPS using a rolling window.
                     # We average the last 30 frame times for a stable reading.
+                    # [Bug fix B5] deque(maxlen=30) auto-evicts old entries — no
+                    # need for manual pop(0) which was O(n).
                     frame_end = time.time()
                     frame_times.append(frame_end - frame_start)
-                    if len(frame_times) > 30:
-                        frame_times.pop(0)
                     if frame_times:
                         avg_frame_time = sum(frame_times) / len(frame_times)
                         fps = 1.0 / avg_frame_time if avg_frame_time > 0 else 0.0
@@ -332,9 +369,11 @@ def main():
                     if sleep_time > 0:
                         time.sleep(sleep_time)
             finally:
-                webcam.release()
-        else:
-            st.error("Failed to initialize webcam. Please check camera connection.")
+                # [Bug fix B1] Do NOT release the webcam here — it's cached in
+                # session_state and must survive Streamlit reruns. The webcam is
+                # only released when the user clicks "Stop Proctoring" or
+                # "Start Proctoring" (which resets everything).
+                pass
 
 if __name__ == "__main__":
     main()

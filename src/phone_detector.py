@@ -41,14 +41,23 @@ class PhoneDetector:
         """
         self.model = YOLO("yolov8n.pt")
 
-    def detect_phones(self, frame: np.ndarray) -> Tuple[List[Dict[str, Any]], int]:
+    def detect_phones(self, frame: np.ndarray, original_shape: tuple = None) -> Tuple[List[Dict[str, Any]], int]:
         """
         Processes a video frame to detect cell phones (COCO Dataset class 67).
         [Performance P1] Uses frame-skipping: only runs YOLO every N-th frame.
         Returns cached results on intermediate frames.
 
+        [Performance P2] Accepts an optional original_shape parameter. When the
+        caller passes a pre-resized frame (e.g., 320px wide), YOLO runs on that
+        smaller image. The bounding box coordinates are then scaled back to the
+        original frame dimensions so drawings are correctly placed on the
+        full-resolution display frame.
+
         Args:
-            frame (np.ndarray): The BGR image frame from the webcam.
+            frame (np.ndarray): The BGR image frame (possibly pre-resized).
+            original_shape (tuple, optional): (h, w, c) of the original full-res
+                frame. If provided and different from frame.shape, coordinates
+                are scaled back to original dimensions.
 
         Returns:
             Tuple[List[Dict[str, Any]], int]: A list of detected phone metadata (bounding box, confidence)
@@ -60,6 +69,17 @@ class PhoneDetector:
         self._frame_counter += 1
         if self._frame_counter % self.frame_skip != 0:
             return self._cached_phones, self._cached_count
+
+        # [Performance P2] Calculate scale factors if the input frame was pre-resized.
+        # YOLO returns pixel coordinates relative to the input frame. If the input
+        # is 320px wide but the display frame is 640px wide, we need to scale 2×.
+        scale_x, scale_y = 1.0, 1.0
+        if original_shape is not None:
+            inp_h, inp_w = frame.shape[:2]
+            orig_h, orig_w = original_shape[:2]
+            if inp_w != orig_w or inp_h != orig_h:
+                scale_x = orig_w / inp_w
+                scale_y = orig_h / inp_h
 
         # [Performance P4] Use imgsz=320 so YOLO internally resizes to 320×320.
         # This halves inference time vs the default 640×640 with minimal accuracy
@@ -74,6 +94,12 @@ class PhoneDetector:
             for box in r.boxes:
                 # YOLO returns xyxy format (top-left and bottom-right points)
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
+                
+                # [Performance P2] Scale coordinates back to original frame size
+                x1 = int(x1 * scale_x)
+                y1 = int(y1 * scale_y)
+                x2 = int(x2 * scale_x)
+                y2 = int(y2 * scale_y)
                 
                 # Calculate width and height for consistency with our system
                 width = x2 - x1
